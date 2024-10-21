@@ -1,0 +1,6 @@
+PROJECT_ROOT := $(CURDIR)
+
+all: build
+
+build:
+	$(CARGO) build --manifest-path=$(PROJECT_ROOT)/Cargo.toml
