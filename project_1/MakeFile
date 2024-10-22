@@ -1,6 +1,20 @@
-PROJECT_ROOT := $(CURDIR)
+TARGET := target/debug
+BINARY_NAME := client
 
-all: build
+# Default target
+all: build move
 
+# Build the project with Cargo
 build:
-	$(CARGO) build --manifest-path=$(PROJECT_ROOT)/Cargo.toml
+	cargo build
+
+# Move the binary to the root directory
+move:
+	cp $(TARGET)/$(BINARY_NAME) ./
+
+# Clean up build files
+clean:
+	cargo clean
+
+# Phony targets so they don't conflict with any files named 'all', 'build', 'move', or 'clean'
+.PHONY: all build move clean

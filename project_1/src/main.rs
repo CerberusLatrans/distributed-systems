@@ -35,10 +35,9 @@ struct Args {
 
 const DEFAULT_PORT: u16 = 27993;
 const DEFAULT_TLS_PORT: u16 = 27994;
-const WORD_LIST_PATH: &str = "/Users/olivertoh/Documents/Classes/Fall-2024/Distributed Systems/project_1/src/words.txt";
+const WORD_LIST_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/", "src", "/", "words.txt");
 
-fn main() {
-    println!("{:?}", std::env::current_dir().unwrap());
+fn parse_args() -> (String, u16, String) {
     let args = Args::parse();
     let port = match args.port {
         Some(p) => p,
@@ -46,49 +45,93 @@ fn main() {
     };
     let hostname = args.hostname;
     let username = args.username;
+    (hostname, port, username)
+}
 
-    //Connect to the server
-    let mut stream: TcpStream;
+fn handshake(hostname: String, port: u16) -> TcpStream {
     if let Ok(s) = TcpStream::connect((hostname.clone(), port)) {
-        stream = s;
+        s
     } else {
-        println!("Failed to connect to server {} on port {}", hostname, port);
-        return;
+        panic!("Failed to connect to server {} on port {}", hostname, port);
     }
-    
+}
+
+// write hello message to stream
+fn greet_server(username: String, mut stream: &TcpStream) {
     let hello = HelloMessage::new(&username);
-    // write hello message to stream
     let mut hello_json = serde_json::to_string(&hello).unwrap();
     hello_json.push_str("\n");
     let _ = stream.write(&hello_json.as_bytes());
+}
 
-    //let mut client_buffer = [0u8; 1024*256*2];
-    let mut client_buffer = Vec::new();
+fn send_guess(mut stream: &TcpStream, id: String, history: Vec<Score>, mut word_list: &Vec<&str>) {
+    let guess_word= make_guess(history, &word_list);
+    let guess = GuessMessage::new(guess_word, id.to_owned());
+    let mut guess_json = serde_json::to_string(&guess).unwrap();
+    guess_json.push_str("\n");
+    let _ = stream.write(&guess_json.as_bytes());
+    stream.flush().unwrap();
+}
+
+fn get_msg_type(server_msg: &Value) -> &str {
+    let server_msg_serde_type = &server_msg["type"];
+    if let Value::String(s) = server_msg_serde_type {
+        s
+    } else {
+        panic!("Server message type not a string");
+    }
+}
+
+fn get_server_msg(buffer: &mut [u8], n: usize) -> Value {
+    //let server_msg_pre = serde_json::from_slice(trunc_buffer);
+    let mut msg_str = str::from_utf8(buffer).unwrap();
+    println!("{}", msg_str);
+    msg_str = msg_str.trim();
+    println!("{}", msg_str);
+    let server_msg_pre = serde_json::from_str(&msg_str[..msg_str.len()-1]);
+    let server_msg: Value = match server_msg_pre {
+        Ok(x) => {
+            println!("Read {} bytes", n);
+            println!(
+                "GOOD: {}\nFULL: {}",
+                str::from_utf8(&buffer[..n]).unwrap(),
+                str::from_utf8(&buffer).unwrap()
+            );
+            x
+        },
+        Err(e) => {
+            println!("{:?}, read {} bytes", e, n);
+            //println!("LAST BYTE: {:?}", &client_buffer[n-3..n+3]);
+            panic!(
+                "ERROR: {}",
+                msg_str);
+        }
+    };
+    println!("LAST BYTE: {}", &buffer[n]);
+    buffer.fill(0);
+    //client_buffer.clear();
+    server_msg
+}
+
+fn main() {
+    let (hostname, port, username) = parse_args();
+    //Connect to the server
+    let mut stream = handshake(hostname, port);
+    greet_server(username, &stream);
+
+    let mut client_buffer = [0u8; 1024*128];
+    //let mut client_buffer = Vec::new();
     let mut id: Option<String> = None;
     
     // read in words.txt into word list
     let word_list_text = fs::read_to_string(PathBuf::from(WORD_LIST_PATH)).unwrap();
     let word_list = word_list_text.split_ascii_whitespace().collect();
     loop {
-        println!("ITER");
-        match stream.read_to_end(&mut client_buffer) { //ERROR: n is cut off message: the whole message has id which from index n to n+j is missing some characters
+        match stream.read(&mut client_buffer) { //ERROR: n is cut off message: the whole message has id which from index n to n+j is missing some characters
             Ok(n) => {
-                let server_msg_pre = serde_json::from_slice(&client_buffer[..n]);
-                let server_msg: Value = match server_msg_pre {
-                    Ok(x) => {println!("GOOD: {}\nFULL: {}", str::from_utf8(&client_buffer[..n]).unwrap(), str::from_utf8(&client_buffer).unwrap()); x},
-                    Err(e) => {println!("{:?}, read {} bytes", e, n); println!("LAST BYTE: {:?}", &client_buffer[n-3..n+3]);println!("ERROR: {}\nFULL: {}", str::from_utf8(&client_buffer[..n]).unwrap(), str::from_utf8(&client_buffer).unwrap()); continue}
-                };
-                println!("LAST BYTE: {}", &client_buffer[n]);
-                client_buffer.fill(0);
-                let server_msg_serde_type = &server_msg["type"];
-                let server_msg_type: &str;
-                if let Value::String(s) = server_msg_serde_type {
-                    server_msg_type = &s;
-                } else {
-                    println!("Server message type not a string");
-                    return
-                }
+                let server_msg = get_server_msg(&mut client_buffer, n);
                 let mut history: Vec<Score> = Vec::new();
+                let server_msg_type = get_msg_type(&server_msg);
                 match server_msg_type {
                     "start" => {
                         let start: StartMessage = serde_json::from_value(server_msg).unwrap();
@@ -98,36 +141,28 @@ fn main() {
                     "retry" => {
                         let retry: RetryMessage = serde_json::from_value(server_msg).unwrap();
                         println!("RETRY");
-                        history = retry.guesses;//7vSjmGo0LJMcn+2oC3V/7ijU8X7QAMuNPiVgvUqXDCcSWN
+                        history = retry.guesses;
                     },
                     "error" => {
                         let error: ErrorMessage = serde_json::from_value(server_msg).unwrap();
-                        println!("Server message error: {}", error.message);
-                        break;
+                        panic!("Server message error: {}", error.message);
                     }
                     "bye" => {
                         let bye: ByeMessage = serde_json::from_value(server_msg).unwrap();
                         println!("{}", bye.flag);
-                        break;
+                        return
                     },
                     _ => {
-                        println!("Server message unknown type: {}", server_msg_type);
-                        break;
+                        panic!("Server message unknown type: {}", server_msg_type);
                     },
-
                 }
+                // write a guess if the id has been given
                 if let Some(identification) = &id {
-                    println!("SENDING ID: {:?}", id);
-                    let guess_word= make_guess(history, &word_list);
-                    let guess = GuessMessage::new(guess_word, identification.to_owned());
-                    let mut guess_json = serde_json::to_string(&guess).unwrap();
-                    guess_json.push_str("\n");
-                    println!("GUESS");
-                    let _ = stream.write(&guess_json.as_bytes());
+                    send_guess(&stream, identification.to_owned(), history, &word_list);
                 }
             },
             Err(error) => {
-                println!("{}", error);
+                panic!("{}", error);
             }    
         }
     }
