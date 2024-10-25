@@ -1,0 +1,7 @@
+High level approach: run a while loop in the main function (client), calling json encode/decode helpers from message.py and guessing functionality from guess.py until the flag is returned. The structure was entirely based on the Rust code I wrote before.
+
+Challenges: Rust. I implemented this entirely in Rust first which took 15+ hours as I am still learning the language. The non-TLS was working but I was unable to complete the TLS version due to issues with shared mutable references to the TLS wrapped TCP stream. I don't doubt that it is possible in Rust using ArcMutexBoxDyn.... but I may have had to switch to an asychronous runtime (tokio) in order to enable splitting the read and write buffers.
+
+Guessing strategy: The word list gets loaded as an array and every time the server sends back marks on a guess, the list gets filtered down to the remaining possible words. If a letter is known not to be in the answer, all words containing that letter get filtered out. If a letter is known to be in the answer, all words not containing that letter get filtered out. If a letter is known to be in a certain position in the answer, all words not having that letter at that position are filtered out. The next guess is the first word in the remaining list.
+
+Testing: The program was run multiple times with different usernames and with/without the -s flag succesfully

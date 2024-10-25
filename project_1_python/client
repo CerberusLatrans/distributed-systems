@@ -1,0 +1,90 @@
+#!/usr/bin/env python
+
+import argparse
+import pathlib
+import socket
+from message import get_message, send_message
+from guess import filter_wordlist
+import ssl
+from requests.utils import DEFAULT_CA_BUNDLE_PATH
+
+# gets the hostname, username, port, and tls security argument
+def get_args():
+    parser = argparse.ArgumentParser(prog='client')
+    parser.add_argument('hostname')
+    parser.add_argument('username')
+    parser.add_argument('-p', '--port')
+    parser.add_argument('-s', '--secure', action='store_true')
+    args = parser.parse_args()
+    hostname = args.hostname
+    username = args.username
+    port = args.port
+    tls = args.secure
+    if not port:
+        port = 27994 if tls else 27993
+    else:
+        port = int(port)
+
+    return hostname, username, port, tls
+
+# reads the words.txt file into a list
+def get_wordlist():
+    path = pathlib.Path(__file__).parent.resolve()
+    path = path.joinpath("words.txt")
+    with open(path, "r") as f:
+        words = f.read().splitlines()
+
+    return words
+
+# creates a TCP socket (non-TLS or TLS) and connects to the server
+def handshake(hostname, port, tls):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if tls:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(DEFAULT_CA_BUNDLE_PATH)
+        s = context.wrap_socket(s, server_hostname=hostname)
+    s.connect((hostname, port))
+    return s
+
+# sends the server the hello message with a username
+def greet_server(s, username):
+    hello_msg = {"type":"hello", "northeastern_username":username}
+    send_message(s, hello_msg)
+
+#sends a guess message with the given word using the given id
+def send_guess(s, id, word):
+    guess_message = {"type":"guess", "id":id, "word":word}
+    send_message(s, guess_message)
+
+# runs the TCP client program to play wordle
+def main():
+    (hostname, username, port, tls) = get_args()
+    words = get_wordlist()
+    s = handshake(hostname, port, tls)
+    greet_server(s, username)
+
+    last_score = None
+    id = None
+    while True:
+        msg = get_message(s)
+        msg_type = msg["type"]
+        if msg_type=="start":
+            id = msg["id"]
+        elif msg_type=="retry":
+            last_score = msg["guesses"][-1]
+        elif msg_type=="error":
+            print(msg)
+        elif msg_type=="bye":
+            flag = msg["flag"]
+            print(flag)
+            s.close()
+            break
+        else:
+            print("TYPE ERROR: ", msg)
+        
+        if last_score:
+            words = filter_wordlist(last_score, words)
+        send_guess(s, id, words[0])
+
+if __name__ == "__main__":
+    main()
